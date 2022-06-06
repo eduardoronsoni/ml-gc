@@ -123,8 +123,12 @@ pipe_rf = pipeline.Pipeline(steps=[('Imput 0', imput_0),
                                    ('One Hot', onehot),
                                    ('Modelo', grid_search)])
 
+# %%
+
+pd.DataFrame(grid_search.cv_results_).sort_values(by='rank_test_score')
 
 # %%
+
 
 def train_test_report(model, X_train, y_train, X_test, y_test, key_metric, is_prob=True):
 
@@ -141,9 +145,21 @@ def train_test_report(model, X_train, y_train, X_test, y_test, key_metric, is_pr
 pipe_rf.fit(X_train, y_train)
 
 # %%
+y_train_pred = pipe_rf.predict(X_train)
+y_train_prob = pipe_rf.predict_proba(X_train)
 
-y_test_pred = model_pipe.predict(X_test)
-y_test_prob = model_pipe.predict_proba(X_test)
+acc_train = metrics.accuracy_score(y_train, y_train_pred)
+roc_train = metrics.roc_auc_score(y_train, y_train_prob[:, 1])
+
+print('acc_train:', acc_train)
+print('roc_train:', roc_train)
+
+print('Baseline:', round((1 - y_train.mean())*100, 2))
+print('Acurácia:', acc_train)
+
+# Base de Teste
+y_test_pred = pipe_rf.predict(X_test)
+y_test_prob = pipe_rf.predict_proba(X_test)
 
 acc_test = metrics.accuracy_score(y_test, y_test_pred)
 roc_test = metrics.roc_auc_score(y_test, y_test_prob[:, 1])
@@ -171,16 +187,47 @@ plt.show()
 
 skplt.metrics.plot_lift_curve(y_test, y_test_prob)
 plt.show()
-# %%
-features_model = model_pipe[:-1].transform(X_train.head()).columns.tolist()
-
-fs_importance = pd.DataFrame({'importance': model_pipe[-1].feature_importances_,
-                              'feature': features_model})
-
-fs_importance.sort_values('importance', ascending=False).head(20)
 
 # %%
-fs_importance.head()
+
+skplt.metrics.plot_lift_curve(y_test, y_test_prob)
+plt.show()
+# %%
+X_oot, y_oot = df_oot[features], df_oot[target]
+
+y_prob_oot = pipe_rf.predict_proba(X_oot)
+
+roc_test = metrics.roc_auc_score(y_oot, y_prob_oot[:, 1])
+
+print('roc_oot:', roc_oot)
 
 
 # %%
+conv_model = (df_oot.sort_values(by=['prob'], ascending=False)
+                    .head(1000)
+                    .mean()['prob'])
+
+conv_sem = (df_oot.sort_values(by=['prob'], ascending=False)
+            .mean()['prob'])
+
+total_model = (df_oot.sort_values(by=['prob'], ascending=False)
+               .head(1000)
+               .sum()['prob'])
+
+total_sem = (df_oot.sort_values(by=['prob'], ascending=False)
+             .sum()['prob'])
+
+
+print(f'Total convertidos modelo {total_model} ({round(100*conv_model,2)}%)')
+print(f'Total convertidos sem modelo {total_sem} ({round(100*conv_sem,2)}%)')
+
+
+# features_model = model_pipe[:-1].transform(X_train.head()).columns.tolist()
+
+# fs_importance = pd.DataFrame({'importance': model_pipe[-1].feature_importances_,
+#                               'feature': features_model})
+
+# fs_importance.sort_values('importance', ascending=False).head(20)
+
+# # %%
+# fs_importance.head()
