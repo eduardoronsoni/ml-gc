@@ -4,44 +4,48 @@ import sqlalchemy
 
 from sklearn.model_selection import train_test_split
 from sklearn import ensemble
+
 from sklearn import pipeline
 from sklearn import metrics
-from sklearn import tree
 from sklearn.model_selection import GridSearchCV
-
 
 from feature_engine import imputation
 from feature_engine import encoding
 
-import scikitplot as skplt
 
-import matplotlib.pyplot as plt
+def report_model(X, y, model, metric, is_prob=True):
+    if is_prob:
+        y_pred = model.predict_proba(X)[:, 1]
+
+    else:
+        y_pred = model.predict(X)
+    res = metric(y, y_pred)
+    return res
 
 # %%
 # SAMPLE
 
+
+print('Importando ABT ...')
 con = sqlalchemy.create_engine(
     "sqlite:///C:/Users/eduar/OneDrive/Área de Trabalho/ranked-ml-main/data/gc.db")
-con.table_names()
-
 df = pd.read_sql_table('tb_abt_sub', con)
-
-df.head()
+print('ok')
 
 # separa como backtest com as 2 ultimas datas para não usar no modelo
+print('Sepranando entre treinamento e backtest ...')
 df_oot = df[df['dtRef'].isin(['2022-01-15', '2021-01-16'])].copy()
-
 df_train = df[~ df['dtRef'].isin(['2022-01-15', '2021-01-16'])].copy()
-
+print('ok')
 
 # definir aleatoriamente base de treino e teste
 features = df_train.columns.tolist()[2:-1]
 target = 'flagSub'
 
-
+print('Separando entre Treino e Teste ...')
 X_train, X_test, y_train, y_test = train_test_split(df_train[features],
                                                     df_train[target], random_state=42, test_size=0.2)
-
+print('ok.')
 
 # EXPLORE
 # análise exploratória apenas em cima de x_train - ser o mais fiel possível
@@ -50,6 +54,8 @@ X_train, X_test, y_train, y_test = train_test_split(df_train[features],
 cat_features = X_train.dtypes[X_train.dtypes == 'object'].index.tolist()
 num_features = list(set(X_train.columns) - set(cat_features))
 
+
+print('Estatística de Missing...')
 print('Missing Numérico')
 is_na = X_train[num_features].isna().sum()
 print(is_na[is_na > 0])
@@ -68,16 +74,16 @@ missing_1 = ['winRateVertigo',
 
 # %%
 
-print('Missing Categórico')
+print(' \n Missing Categórico')
 is_na = X_train[cat_features].isna().sum()
 print(is_na[is_na > 0])
 
-
+print('ok')
 # %%
 
 
 # MODIFY
-
+print('Construindo pipeline de ML ... ')
 # imputação de dados
 imput_0 = imputation.ArbitraryNumberImputer(
     arbitrary_number=0, variables=missing_0)
@@ -94,26 +100,12 @@ onehot = encoding.OneHotEncoder(drop_last=True, variables=cat_features)
 rf_clf = ensemble.RandomForestClassifier(
     n_estimators=200, min_samples_leaf=50, n_jobs=-1, random_state=42)
 
-ada_clf = ensemble.AdaBoostClassifier(n_estimators=200,
-                                      learning_rate=0.8,
-                                      random_state=42)
 
-dt_clf = tree.DecisionTreeClassifier(max_depth=15,
-                                     min_samples_leaf=50,
-                                     random_state=42)
+params = {'n_estimators': [200, 250],
+          'min_samples_leaf': [5, 10, 20]}
 
-rl_clf = linear_model.LogisticRegressionCV(cv=4, n_jobs=-1)
-
-params = {'n_estimators': [50, 100, 200, 250],
-          'min_samples_leaf': [5, 10, 20, 50, 100]}
-
-grid_search = GridSearchCV(rf_clf,
-                           params,
-                           n_jobs=1,
-                           cv=4,
-                           scoring='roc_auc',
-                           verbose=3,
-                           refit=True)
+grid_search = GridSearchCV(rf_clf, params, n_jobs=1,
+                           cv=4, scoring='roc_auc', refit=True)
 
 
 # Definir um pipeline
@@ -123,111 +115,47 @@ pipe_rf = pipeline.Pipeline(steps=[('Imput 0', imput_0),
                                    ('One Hot', onehot),
                                    ('Modelo', grid_search)])
 
-# %%
+print('ok')
 
-pd.DataFrame(grid_search.cv_results_).sort_values(by='rank_test_score')
-
-# %%
-
-
-def train_test_report(model, X_train, y_train, X_test, y_test, key_metric, is_prob=True):
-
-    model.fit(X_train, y_train)
-    pred = model.predict(X_test)
-    prob = model.predict_proba(X_test)
-
-    metric_result = key_metric(
-        y_test, prob[:, 1]) if is_prob else key_metric(y_test, pred)
-    return metric_result
-
-
-# %%
+print('Encontrando o melhor modelo com grid search ...')
 pipe_rf.fit(X_train, y_train)
-
+print('ok.')
 # %%
-y_train_pred = pipe_rf.predict(X_train)
-y_train_prob = pipe_rf.predict_proba(X_train)
+auc_train = report_model(X_train, y_train, pipe_rf, metrics.roc_auc_score)
+auc_test = report_model(X_test, y_test, pipe_rf, metrics.roc_auc_score)
+auc_oot = report_model(
+    df_oot[features], df_oot[target], pipe_rf, metrics.roc_auc_score)
 
-acc_train = metrics.accuracy_score(y_train, y_train_pred)
-roc_train = metrics.roc_auc_score(y_train, y_train_prob[:, 1])
-
-print('acc_train:', acc_train)
-print('roc_train:', roc_train)
-
-print('Baseline:', round((1 - y_train.mean())*100, 2))
-print('Acurácia:', acc_train)
-
-# Base de Teste
-y_test_pred = pipe_rf.predict(X_test)
-y_test_prob = pipe_rf.predict_proba(X_test)
-
-acc_test = metrics.accuracy_score(y_test, y_test_pred)
-roc_test = metrics.roc_auc_score(y_test, y_test_prob[:, 1])
-
-print('acc_test:', acc_test)
-print('roc_test:', roc_test)
-
-print('Baseline:', round((1 - y_test.mean())*100, 2))
-print('Acurácia:', acc_test)
+print('auc_train', auc_train)
+print('auc_test', auc_test)
+print('auc_oot', auc_oot)
 # %%
 
-skplt.metrics.plot_roc(y_test, y_test_prob)
-plt.show()
+print('Ajustando modelo para a base toda ...')
+pipe_model = pipeline.Pipeline(steps=[('Imput 0', imput_0),
+                                      ('Imput 1', imput_1),
+                                      ('One Hot', onehot),
+                                      ('Modelo', grid_search.best_estimator_)])
+pipe_model.fit(df[features], df[target])
+print('ok')
+
+# %%
+print('Feature importance by model ...')
+features_transformed = pipe_model[:-1].transform(df[features]).columns.tolist()
+features_importance = pd.DataFrame(
+    pipe_model[-1].feature_importances_, index=features_transformed)
+features_importance.sort_values(by=0, ascending=False)
+print('ok.')
 
 # %%
 
-skplt.metrics.plot_ks_statistic(y_test, y_test_prob)
-plt.show()
+series_model = pd.Series({
+    'model': pipe_model,
+    'features': features,
+    'auc_train': auc_train,
+    'auc_test': auc_test,
+    'auc_oot': auc_oot
+})
 
+series_model.to_pickle('../../../models/modelo_subscription.pkl')
 # %%
-
-skplt.metrics.plot_precision_recall(y_test, y_test_prob)
-plt.show()
-# %%
-
-skplt.metrics.plot_lift_curve(y_test, y_test_prob)
-plt.show()
-
-# %%
-
-skplt.metrics.plot_lift_curve(y_test, y_test_prob)
-plt.show()
-# %%
-X_oot, y_oot = df_oot[features], df_oot[target]
-
-y_prob_oot = pipe_rf.predict_proba(X_oot)
-
-roc_test = metrics.roc_auc_score(y_oot, y_prob_oot[:, 1])
-
-print('roc_oot:', roc_oot)
-
-
-# %%
-conv_model = (df_oot.sort_values(by=['prob'], ascending=False)
-                    .head(1000)
-                    .mean()['prob'])
-
-conv_sem = (df_oot.sort_values(by=['prob'], ascending=False)
-            .mean()['prob'])
-
-total_model = (df_oot.sort_values(by=['prob'], ascending=False)
-               .head(1000)
-               .sum()['prob'])
-
-total_sem = (df_oot.sort_values(by=['prob'], ascending=False)
-             .sum()['prob'])
-
-
-print(f'Total convertidos modelo {total_model} ({round(100*conv_model,2)}%)')
-print(f'Total convertidos sem modelo {total_sem} ({round(100*conv_sem,2)}%)')
-
-
-# features_model = model_pipe[:-1].transform(X_train.head()).columns.tolist()
-
-# fs_importance = pd.DataFrame({'importance': model_pipe[-1].feature_importances_,
-#                               'feature': features_model})
-
-# fs_importance.sort_values('importance', ascending=False).head(20)
-
-# # %%
-# fs_importance.head()
